@@ -1,0 +1,8 @@
+numpy
+scipy
+librosa
+matplotlib
+sqlite3
+tqdm
+concurrent.futures
+pyaudio
