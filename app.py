@@ -10,44 +10,43 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor
 
 
-### **STEP 1: Generate Spectrogram**
 def generate_spectrogram(audio_file, n_fft=1024, hop_length=512):
     """Convert audio file into a spectrogram with optimized FFT size."""
-    y, sr = librosa.load(audio_file, sr=None, duration=30)  # Load only 30 seconds
+    y, sr = librosa.load(audio_file, sr=None, duration=30)  
     S = np.abs(librosa.stft(y, n_fft=n_fft, hop_length=hop_length))  # Compute STFT
     S_db = librosa.amplitude_to_db(S, ref=np.max)  # Convert to decibels
     return S_db, sr
 
 
-### **STEP 2: Find Spectrogram Peaks**
+
 def find_peaks(S_db, percentile=95, neighborhood_size=(20, 20), min_freq=100, max_freq=4000, sr=22050, max_peaks_per_time_bin=3):
     """Optimized peak detection: adaptive threshold, frequency filtering, and peak density control."""
-    threshold = np.percentile(S_db, percentile)  # Dynamic thresholding
-    local_max = maximum_filter(S_db, neighborhood_size)  # Find local maxima
-    peaks = (S_db == local_max) & (S_db > threshold)  # Apply threshold
+    threshold = np.percentile(S_db, percentile)  
+    local_max = maximum_filter(S_db, neighborhood_size)  
+    peaks = (S_db == local_max) & (S_db > threshold)  
 
-    # Convert frequency bins to Hz
+ 
     freqs = librosa.fft_frequencies(sr=sr, n_fft=1024)
 
-    # Keep only peaks within frequency range
+   
     valid_peaks = [p for p in np.argwhere(peaks) if min_freq <= freqs[p[0]] <= max_freq]
     valid_peaks = np.array(valid_peaks)
 
-    # Limit the number of peaks per time step
+    
     if len(valid_peaks) > 0:
-        unique_times = np.unique(valid_peaks[:, 1])  # Get unique time bins
+        unique_times = np.unique(valid_peaks[:, 1])  
         filtered_peaks = []
         for t in unique_times:
             peaks_at_t = valid_peaks[valid_peaks[:, 1] == t]
             sorted_peaks = sorted(peaks_at_t, key=lambda x: S_db[x[0], x[1]], reverse=True)
-            filtered_peaks.extend(sorted_peaks[:max_peaks_per_time_bin])  # Keep top peaks
+            filtered_peaks.extend(sorted_peaks[:max_peaks_per_time_bin])  
 
         return np.array(filtered_peaks)
 
     return valid_peaks
 
 
-### **STEP 3: Generate Fingerprints**
+
 def generate_fingerprints(peaks, fan_out=10):
     """Create hashes from anchor-target peak pairs."""
     fingerprints = []
@@ -57,20 +56,20 @@ def generate_fingerprints(peaks, fan_out=10):
                 f1, t1 = peaks[i]
                 f2, t2 = peaks[i + j]
                 delta_t = t2 - t1
-                if 0 < delta_t < 200:  # Time difference constraint
+                if 0 < delta_t < 200:  
                     hash_string = f"{f1}|{f2}|{delta_t}"
                     hash_value = hashlib.sha1(hash_string.encode()).hexdigest()[:10]
-                    fingerprints.append((hash_value, t1))  # Store hash + time offset
+                    fingerprints.append((hash_value, t1))  
     return fingerprints
 
 
-### **STEP 4: Database Setup**
+
 def create_database():
     """Initialize the SQLite database with indexing."""
     conn = sqlite3.connect('shazam.db')
     cursor = conn.cursor()
 
-    # Create tables
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS fingerprints (
             hash TEXT NOT NULL, 
@@ -85,21 +84,19 @@ def create_database():
         )
     ''')
 
-    # Create index for faster hash lookup
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_fingerprint_hash ON fingerprints (hash)")
 
     conn.commit()
     conn.close()
 
 
-### **STEP 5: Store Song Fingerprints in Database**
 def insert_song_fingerprints(song_name, fingerprints):
     """Batch insert fingerprints into the database for speed."""
     conn = sqlite3.connect('shazam.db')
     cursor = conn.cursor()
 
     cursor.execute("INSERT INTO songs (song_name) VALUES (?)", (song_name,))
-    song_id = cursor.lastrowid  # Get inserted song ID
+    song_id = cursor.lastrowid  
 
     cursor.executemany("INSERT INTO fingerprints (hash, time_offset, song_id) VALUES (?, ?, ?)",
                        [(hash_value, time_offset, song_id) for hash_value, time_offset in fingerprints])
@@ -108,7 +105,6 @@ def insert_song_fingerprints(song_name, fingerprints):
     conn.close()
 
 
-### **STEP 6: Process All Songs in a Folder**
 def process_song(file_path):
     """Process a single song file."""
     try:
@@ -121,7 +117,7 @@ def process_song(file_path):
 
 def process_folder(folder_path):
     """Process all songs in a folder in parallel."""
-    create_database()  # Ensure database exists
+    create_database()  
 
     files = [os.path.join(folder_path, f) for f in os.listdir(folder_path) if f.endswith('.mp3') or f.endswith('.wav')]
     
@@ -137,7 +133,7 @@ def process_folder(folder_path):
     print("All songs processed and stored in the database!")
 
 
-### **STEP 7: Optimized Matching Using Hashing**
+
 def match_fingerprints(sample_fingerprints):
     """Compare sample fingerprints using database hashing."""
     conn = sqlite3.connect('shazam.db')
@@ -150,7 +146,7 @@ def match_fingerprints(sample_fingerprints):
         results = cursor.fetchall()
 
         for db_time, song_id in results:
-            # Convert from bytes if necessary
+            
             if isinstance(db_time, bytes):  
                 db_time = int.from_bytes(db_time, byteorder='little')
             else:
@@ -176,8 +172,6 @@ def match_fingerprints(sample_fingerprints):
     return (result[0], matches[best_match]) if result else (None, 0)
 
 
-
-### **STEP 8: Recognizing a Recorded Sample**
 def recognize_song(sample_path):
     """Recognize a recorded song sample using optimized matching."""
     try:
@@ -194,13 +188,9 @@ def recognize_song(sample_path):
     except Exception as e:
         print(f" Error processing sample: {e}")
 
-
-### **HOW TO USE THE PROGRAM**
 if __name__ == "__main__":
-    # Step 1: Process all songs in the folder and store fingerprints
     folder_path = "songs/"  # Change this to your folder path
     process_folder(folder_path)
 
-    # Step 2: Recognize a recorded sample
     sample_path = "Analyze/Analyze.mp3"  # Change this to your sample file path
     recognize_song(sample_path)
